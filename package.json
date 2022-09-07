@@ -1,0 +1,25 @@
+{
+  "name": "performant-mongo",
+  "version": "1.0.0",
+  "main": "index.js",
+  "license": "MIT",
+  "scripts": {
+    "start": "tsc --watch",
+    "dev": "nodemon dist"
+  },
+  "dependencies": {
+    "apollo-server": "^3.10.2",
+    "dataloader": "^2.1.0",
+    "graphql": "^16.6.0",
+    "lodash": "^4.17.21",
+    "luxon": "^3.0.3",
+    "mongodb": "^4.9.1",
+    "ts-node": "^10.9.1"
+  },
+  "devDependencies": {
+    "@types/lodash": "^4.14.184",
+    "@types/luxon": "^3.0.1",
+    "nodemon": "^2.0.19",
+    "typescript": "^4.8.2"
+  }
+}

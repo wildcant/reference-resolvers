@@ -1,25 +1,22 @@
-import { IResolvers } from '@graphql-tools/utils'
 import { ApolloServer, gql } from 'apollo-server'
 import DataLoader from 'dataloader'
-import {
-  GraphQLID,
-  GraphQLObjectType,
-  GraphQLResolveInfo,
-  GraphQLType,
-  GraphQLFieldResolver,
-  DocumentNode,
-} from 'graphql'
+import { GraphQLFieldResolver, GraphQLResolveInfo } from 'graphql'
 import { Document, MongoClient, ObjectId } from 'mongodb'
 import {
   parseResolveInfo,
   ResolveTree,
   simplifyParsedResolveInfoFragmentWithType,
-} from '../graphql-parse-resolve-info'
-const uri = 'mongodb://127.0.0.1:27017/tcoop_db_stage'
+} from './graphql-parse-resolve-info'
 
+/**
+ * DB
+ */
+
+const uri = 'mongodb://127.0.0.1:27017/tcoop_db_stage'
 // Logger not working use monitor instead
 // -> https://www.mongodb.com/docs/drivers/node/current/fundamentals/logging/
 const client = new MongoClient(uri, { monitorCommands: true })
+/*  
 client.on('commandStarted', (event) =>
   console.debug('Command Started\n', JSON.stringify(event, null, 2))
 )
@@ -29,34 +26,35 @@ client.on('commandSucceeded', (event) =>
 client.on('commandFailed', (event) =>
   console.debug('Command Failed\n', JSON.stringify(event, null, 2))
 )
+/* */
 
 const database = client.db('tcoop_db_stage')
 
 const reservations = database.collection('reservations')
 const companies = database.collection('companies')
 const vehicles = database.collection('vehicles')
+const locations = database.collection('locations')
 
-const Reservation = new GraphQLObjectType({
-  name: 'Reservation',
-  fields: {
-    _id: { type: GraphQLID },
-  },
-})
+/**
+ * Projection, fields selection for db layer.
+ */
+export const getFields = (info: GraphQLResolveInfo) => {
+  const parsedResolveInfoFragment = parseResolveInfo(info)
+  const { fields } = simplifyParsedResolveInfoFragmentWithType(
+    parsedResolveInfoFragment as ResolveTree,
+    info.returnType
+  )
 
-const Company = new GraphQLObjectType({
-  name: 'Company',
-  fields: {
-    _id: { type: GraphQLID },
-  },
-})
+  return fields
+}
 
-const Vehicle = new GraphQLObjectType({
-  name: 'Vehicle',
-  fields: {
-    _id: { type: GraphQLID },
-  },
-})
+export const getProjection = (info: GraphQLResolveInfo) => {
+  return Object.keys(getFields(info))
+}
 
+/**
+ * Schema definition.
+ */
 const typeDefs = gql`
   scalar Date
 
@@ -112,16 +110,22 @@ const typeDefs = gql`
   }
 
   type Company {
-    _id: String!
+    _id: ID
     name: String
   }
 
+  type Location {
+    _id: ID
+    timezone: String
+  }
+
   type Vehicle {
-    _id: String!
+    _id: ID
     customerVehicleNumber: String
     licensePlate: LicensePlate
     location: Location
     details: VehicleDetails
+    vin: String
   }
 
   enum UserRole {
@@ -133,7 +137,7 @@ const typeDefs = gql`
   }
 
   type User {
-    _id: String!
+    _id: ID
     company: Company
     role: UserRole
     userName: String
@@ -141,11 +145,6 @@ const typeDefs = gql`
 
   type LicensePlate {
     state: String
-  }
-
-  type Location {
-    _id: String!
-    timezone: String
   }
 
   type VehicleDetails {
@@ -176,21 +175,21 @@ const typeDefs = gql`
   }
 `
 
-const getFields = (info: GraphQLResolveInfo, type: GraphQLType) => {
-  // console.log('** getFields **')
-  const parsedResolveInfoFragment = parseResolveInfo(info)
-  const { fields } = simplifyParsedResolveInfoFragmentWithType(
-    parsedResolveInfoFragment as ResolveTree,
-    type
-  )
-  // console.log(
-  //   'parsedResolveInfoFragment: ',
-  //   JSON.stringify(parsedResolveInfoFragment, null, 2),
-  //   'fields: ',
-  //   JSON.stringify(fields, null, 2),
-  //   '\n\n\n',
-  // )
-  return Object.keys(fields)
+type ILocation = {
+  _id: string
+  timezone?: string
+}
+
+type IVehicle = {
+  _id: string
+  customerVehicleNumber: string
+  licensePlate: {}
+  location: string | ILocation
+  details: {
+    make: string
+    model: string
+  }
+  vin: string
 }
 
 type GenericResolver = GraphQLFieldResolver<any, any, any, Promise<any>>
@@ -198,31 +197,79 @@ type GenericResolver = GraphQLFieldResolver<any, any, any, Promise<any>>
 const resolvers: { [entity: string]: { [key: string]: GenericResolver } } = {
   Query: {
     reservation: async (_, params, ctx, info) => {
-      console.log('reservation')
-      return ctx.reservationsLoader.load({
-        key: params._id,
-        fields: getFields(info, Reservation),
-      })
+      return {
+        __typename: 'Reservation',
+        _id: params._id,
+        fields: getProjection(info),
+      }
     },
     reservations: async (_, params, context, info) => {
-      console.log('reservations query')
-      return {}
+      const fields = getFields(info) as any
+      const reservations = [
+        { _id: '61f85f7702a80b05803dba9b' },
+        { _id: '61f8600c02a80b05803dbf19' },
+        { _id: '61f8605002a80b05803dc099' },
+        { _id: '620134dc2c9af1001e6c343a' },
+        { _id: '6201352d2c9af1001e6c3680' },
+      ]
+
+      return {
+        totalCount: 5,
+        pageInfo: {
+          hasNextPage: false,
+          hasPreviousPage: false,
+        },
+        nodes: reservations.map(({ _id }) => ({
+          __typename: 'Reservation',
+          _id,
+          // TODO: Implement generic way to generate projection.
+          fields: Object.keys(fields.nodes.fieldsByTypeName.Reservation),
+        })),
+      }
+    },
+  },
+  Vehicle: {
+    __resolveObject(vehicle, params, ctx, info) {
+      return ctx.vehicleLoader.load({
+        key: vehicle._id,
+        fields: vehicle.fields,
+      })
+    },
+    location: (vehicle, params, ctx, info) => {
+      return {
+        __typename: 'Location',
+        _id: vehicle.location,
+        fields: getProjection(info),
+      } as any
     },
   },
   Reservation: {
+    __resolveObject: (reservation, params, ctx, info) => {
+      console.log('Reservation__resolveObject', reservation._id)
+      return ctx.reservationLoader.load({
+        key: reservation._id,
+        fields: reservation.fields,
+      })
+    },
     borrowerCompany: (res, params, ctx, info) => {
       return ctx.companyLoader.load({
         key: res.borrowerCompany,
-        fields: getFields(info, Company),
+        fields: getProjection(info),
       })
     },
-    /**
-     * TODO: Only one level deep. we can't have location without populating query :/.
-     */
     vehicle: (res, params, ctx, info) => {
-      return ctx.vehicleLoader.load({
-        key: res.vehicle,
-        fields: getFields(info, Vehicle),
+      return {
+        __typename: 'Vehicle',
+        _id: res.vehicle,
+        fields: getProjection(info),
+      } as any
+    },
+  },
+  Location: {
+    __resolveObject: (location, params, ctx, info) => {
+      return ctx.locationLoader.load({
+        key: location._id,
+        fields: location.fields,
       })
     },
   },
@@ -230,34 +277,32 @@ const resolvers: { [entity: string]: { [key: string]: GenericResolver } } = {
 
 type LoadFnKey = { key: ObjectId | string; fields?: Document }
 const server = new ApolloServer({
-  typeDefs,
-  resolvers,
+  modules: [{ typeDefs, resolvers }],
   // Loader within context.
   // https://github.com/graphql/dataloader/issues/95
   context: () => {
     return {
       // Load specific fields.
       // https://github.com/graphql/dataloader/issues/236
-      reservationsLoader: new DataLoader<LoadFnKey, Document>(async (keys) => {
-        const fields = keys[0].fields ?? {}
+      // TODO: Check that is batching requests correctly.
+      reservationLoader: new DataLoader<LoadFnKey, Document>(async (keys) => {
+        console.log('reservationLoader')
+        const fields = keys[0].fields ?? []
         const ids = keys.map(({ key }) =>
           key instanceof ObjectId ? key : new ObjectId(key)
         )
-
         console.log({ fields, ids })
         const response = await reservations
-          .find({
-            _id: { $in: [new ObjectId('62fd3b66398257001fc97a8f')] },
-          })
+          .find({ _id: { $in: ids } })
           .project(fields)
           .toArray()
         console.log({ response })
-
+        console.log('\n')
         return response
       }),
 
       companyLoader: new DataLoader<LoadFnKey, Document>(async (keys) => {
-        const fields = keys[0].fields ?? {}
+        const fields = keys[0].fields ?? []
         const ids = keys.map(({ key }) =>
           key instanceof ObjectId ? key : new ObjectId(key)
         )
@@ -268,15 +313,43 @@ const server = new ApolloServer({
       }),
 
       vehicleLoader: new DataLoader<LoadFnKey, Document>(async (keys) => {
-        const fields = keys[0].fields ?? {}
+        console.log('vehicleLoader')
+        const fields = keys[0].fields ?? []
         const ids = keys.map(({ key }) =>
           key instanceof ObjectId ? key : new ObjectId(key)
         )
 
-        return await vehicles
+        console.log({ fields, ids })
+        let response = (await vehicles
+          .find({ _id: { $in: ids } })
+          .project(fields)
+          .toArray()) as any as IVehicle[]
+
+        console.log({ response })
+        console.log('\n')
+
+        // TODO: Update query so it returns the same number of vehicles from ids array.
+        // return ids.map(() => response[0])
+        return response
+      }),
+
+      locationLoader: new DataLoader<LoadFnKey, Document>(async (keys) => {
+        console.log('locationLoader')
+        const fields = keys[0].fields ?? []
+        const ids = keys.map(({ key }) =>
+          key instanceof ObjectId ? key : new ObjectId(key)
+        )
+        console.log({ fields, ids })
+        let response = await locations
           .find({ _id: { $in: ids } })
           .project(fields)
           .toArray()
+        console.log({ response })
+        console.log('\n')
+
+        // TODO: Update query so it returns the same number of locations from ids array.
+        // return ids.map(() => response[0])
+        return response
       }),
     }
   },
